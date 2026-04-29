@@ -67,6 +67,12 @@ let lastGrazeFrame = 0;
 let screenShake = 0;
 let floatTexts = [];
 let windX = 0;
+let bot = null;
+let botScore = 0;
+let raceOver = false;
+let raceResult = '';
+let waveAnnounceSub = '';
+let waveAnnounceSubTimer = 0;
 
 try{
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -89,7 +95,11 @@ function resize(){
   H = canvas.height = Math.max(vh, 1);
   if(player){
     player.x = Math.min(Math.max(player.r, player.x), W - player.r);
-    player.y = H * 0.78;
+    player.y = H * 0.76;
+  }
+  if(bot){
+    bot.y = H * 0.86;
+    bot.x = Math.min(Math.max(bot.r, bot.x), W - bot.r);
   }
   touchX = Math.min(Math.max(touchX, 0), W);
 }
@@ -138,6 +148,7 @@ function maxHazardsOnScreen(){
   var d = diff01();
   var cap = Math.min(13, Math.floor(4 + d * 6 + (W / 430) * 2));
   if(waveMode === 'siege') cap += 4;
+  if(waveMode === 'minefield') cap += 8;
   return cap;
 }
 
@@ -166,6 +177,7 @@ function nextSpawnDelayFrames(){
   var t = lo + Math.random() * (hi - lo);
   if(waveMode === 'burst') t *= 0.48;
   if(waveMode === 'siege') t *= 0.72;
+  if(waveMode === 'minefield') t *= 0.55;
   return t;
 }
 
@@ -201,6 +213,12 @@ function startWave(mode){
   };
   waveAnnounce = names[mode] || '';
   waveAnnounceTimer = 95;
+  waveAnnounceSub = '';
+  waveAnnounceSubTimer = 0;
+  if(mode === 'minefield'){
+    waveAnnounceSub = '\u0421\u0435\u0442\u043a\u0430 \u043e\u0441\u043a\u043e\u043b\u043a\u043e\u0432 \u2014 \u043f\u0440\u043e\u0441\u043a\u0430\u043b\u044c\u0437\u0438 \u043c\u0435\u0436\u0434\u0443 \u043d\u0438\u043c\u0438';
+    waveAnnounceSubTimer = 130;
+  }
   screenShake = mode === 'siege' || mode === 'seismic' ? 12 : (mode === 'burst' ? 8 : 5);
   hapticLight();
   if(mode === 'seismic'){
@@ -211,19 +229,36 @@ function startWave(mode){
     hapticMedium();
   }
   if(mode === 'minefield'){
-    var hs = hazardSpeed();
-    for(var q = 0; q < 5; q++){
-      if(countActiveHazards() >= maxHazardsOnScreen()) break;
+    layMinefieldGrid();
+    screenShake = Math.max(screenShake, 7);
+    addFloatText(W / 2, H * 0.42, '\u041c\u0418\u041d\u042b!', '#f472b6', 70);
+  }
+}
+
+function layMinefieldGrid(){
+  var hs = hazardSpeed();
+  var cols = Math.max(5, Math.min(9, Math.floor(W / 46)));
+  var rows = 4;
+  var cell = W / cols;
+  for(var row = 0; row < rows; row++){
+    for(var col = 0; col < cols; col++){
+      if(countActiveHazards() >= maxHazardsOnScreen()) return;
+      var jitterX = (Math.random() - 0.5) * (cell * 0.22);
+      var jitterY = (Math.random() - 0.5) * 14;
+      var x = col * cell + cell * 0.5 + jitterX;
+      x = Math.max(8, Math.min(W - 8, x));
+      var yBase = -35 - row * (H * 0.11) - jitterY;
       pushHazard({
         kind: 'shard',
+        mineSeed: true,
         pickup: false,
-        x: (q + 0.5) * (W / 5) + (Math.random() - 0.5) * 28,
-        y: -25 - Math.random() * 40,
-        r: 5 + Math.random() * 5,
-        vy: hs * (1.05 + Math.random() * 0.4),
-        vx: (Math.random() - 0.5) * 2.4,
+        x: x,
+        y: yBase,
+        r: 4.5 + Math.random() * 4,
+        vy: hs * (0.95 + Math.random() * 0.45),
+        vx: (Math.random() - 0.5) * 1.6,
         rot: 0,
-        rotV: (Math.random() - 0.5) * 0.2
+        rotV: (Math.random() - 0.5) * 0.22
       });
     }
   }
@@ -439,9 +474,13 @@ function persistBest(){
 }
 
 function restart(){
-  player = { x: W / 2, y: H * 0.78, r: 20 };
+  player = { x: W / 2, y: H * 0.76, r: 20 };
+  bot = { x: W * 0.5, y: H * 0.86, r: 16, alive: true };
   meteors = []; particles = []; floatTexts = [];
   score = 0; alive = true; frame = 0;
+  botScore = 0;
+  raceOver = false;
+  raceResult = '';
   baseSpeed = 2.05;
   slowTimer = 0; doubleTimer = 0; magnetTimer = 0;
   shield = false; shieldTimer = 0; touchX = W / 2;
@@ -449,15 +488,31 @@ function restart(){
   phaseTag = ''; phaseTagTimer = 0;
   waveMode = 'normal'; waveTimer = 0;
   waveAnnounce = ''; waveAnnounceTimer = 0;
+  waveAnnounceSub = ''; waveAnnounceSubTimer = 0;
   nextWaveRoll = 400 + Math.floor(Math.random() * 120);
   combo = 0; sessionMaxCombo = 0; lastGrazeFrame = 0;
   screenShake = 0; windX = 0;
   hapticLight();
 }
 
-function setPointerX(clientX){
-  const rect = canvas.getBoundingClientRect();
-  touchX = clientX - rect.left;
+function updateBotAI(){
+  if(!bot || !bot.alive || raceOver || !alive) return;
+  var desired = touchX * 0.42 + W * 0.29;
+  var flee = 0;
+  for(var bi = 0; bi < meteors.length; bi++){
+    var hm = meteors[bi];
+    if(hm.pickup) continue;
+    var dy = bot.y - hm.y;
+    if(dy < -50 || dy > 220) continue;
+    var dx = hm.x - bot.x;
+    var d = Math.sqrt(dx * dx + dy * dy) + 0.001;
+    var threat = (hm.r + 36) * (1.15 - Math.min(1, d / 130));
+    if(threat > 0 && d < 130){
+      flee += -(dx / d) * threat * 0.85;
+    }
+  }
+  bot.x += flee * 0.11 + (desired - bot.x) * 0.095;
+  bot.x = Math.max(bot.r + 4, Math.min(W - bot.r - 4, bot.x));
 }
 
 canvas.addEventListener('mousemove', function(e){ if(alive) setPointerX(e.clientX); });
@@ -501,7 +556,7 @@ function loop(){
   });
   ctx.globalAlpha = 1;
 
-  if(alive){
+  if(alive && !raceOver){
     frame++;
     var pt = doubleTimer > 0 ? 2 : 1;
     score += pt;
@@ -527,6 +582,7 @@ function loop(){
       }
     }
     if(waveAnnounceTimer > 0) waveAnnounceTimer -= 1;
+    if(waveAnnounceSubTimer > 0) waveAnnounceSubTimer -= 1;
     nextWaveRoll -= 1;
     if(nextWaveRoll <= 0){
       rollWave();
@@ -537,8 +593,8 @@ function loop(){
       var tips = [
         '\u0411\u0440\u043e\u0441\u043a\u0438 \u0432\u043f\u043b\u043e\u0442\u043d\u0443\u044e \u2014 \u043a\u043e\u043c\u0431\u043e \u0438 \u043e\u0447\u043a\u0438',
         '\u0412\u043e\u043b\u043d\u044b: \u043d\u0430\u043b\u0451\u0442, \u043e\u0431\u0441\u0430\u0434\u0430, \u043c\u0435\u0442\u0435\u043e\u0437\u0430\u0432\u0440\u0438\u0445',
-        '\u041c\u0430\u0433\u043d\u0438\u0442 \u0442\u044f\u043d\u0435\u0442 \u0431\u043e\u043d\u0443\u0441\u044b',
-        '\u0421\u0435\u0439\u0441\u043c \u0447\u0438\u0441\u0442\u0438\u0442 \u043f\u043e\u043b\u043e\u0432\u0438\u043d\u0443 \u044d\u043a\u0440\u0430\u043d\u0430',
+        '\u041c\u0438\u043d\u043d\u043e\u0435 \u043f\u043e\u043b\u0435 \u2014 \u0441\u0435\u0442\u043a\u0430 \u043e\u0441\u043a\u043e\u043b\u043a\u043e\u0432 \u0441\u0432\u0435\u0440\u0445\u0443',
+        '\u041d\u0438\u0436\u0435 \u2014 AI, \u043a\u0442\u043e \u043f\u0435\u0440\u0432\u044b\u0439 \u043d\u0430\u0431\u0435\u0440\u0451\u0442 \u043e\u0447\u043a\u0438',
         '\u041a\u043e\u043c\u0435\u0442\u0430 \u043c\u0435\u0434\u043b\u0435\u043d\u043d\u0430\u044f, \u043d\u043e \u0436\u0438\u0440\u043d\u0430\u044f'
       ];
       phaseTag = tips[Math.floor(Math.random() * tips.length)];
@@ -546,6 +602,10 @@ function loop(){
     }
     player.x += (touchX - player.x) * 0.2;
     player.x = Math.max(player.r, Math.min(W - player.r, player.x));
+    if(bot && bot.alive){
+      updateBotAI();
+      botScore += pt * 0.92;
+    }
   }
 
   for(let i = meteors.length - 1; i >= 0; i--){
@@ -579,6 +639,7 @@ function loop(){
       var hitPad = m.kind === 'shard' || m.kind === 'bolt' ? 2 : (m.kind === 'comet' ? 4 : 6);
       if(m.pickup) hitPad = 0;
       var hitR = m.r + player.r - hitPad;
+      var pt = doubleTimer > 0 ? 2 : 1;
 
       if(!m.pickup && !m.grazeDone && dist >= hitR && dist < hitR + 22){
         var bonus = (5 + Math.min(25, combo * 3)) * pt;
@@ -639,7 +700,27 @@ function loop(){
           addPfx(player.x, player.y, '#ff2d55', 30);
           screenShake = 22;
           hapticHeavy();
+          raceOver = true;
+          if(bot && bot.alive){
+            raceResult = Math.floor(score / 10) >= Math.floor(botScore / 10) ? 'duel_win' : 'duel_loss';
+          } else {
+            raceResult = 'player_dead';
+          }
         }
+      }
+    }
+
+    if(bot && bot.alive && !m.pickup){
+      var bdx = m.x - bot.x, bdy = m.y - bot.y;
+      var bdist = Math.sqrt(bdx * bdx + bdy * bdy);
+      var bPad = m.kind === 'shard' || m.kind === 'bolt' ? 2 : (m.kind === 'comet' ? 4 : 6);
+      var bHitR = m.r + bot.r - bPad;
+      if(bdist < bHitR){
+        bot.alive = false;
+        addPfx(bot.x, bot.y, '#a78bfa', 28);
+        addFloatText(bot.x, bot.y - 28, 'AI \u2192 BOOM', '#c4b5fd', 65);
+        screenShake = Math.max(screenShake, 12);
+        hapticMedium();
       }
     }
 
@@ -687,9 +768,11 @@ function loop(){
       } else {
         grd.addColorStop(0, '#ff9800'); grd.addColorStop(0.5, '#f44336'); grd.addColorStop(1, '#4a1010');
       }
-      ctx.fillStyle = grd;
-      ctx.beginPath();
-      var spikes = m.kind === 'shard' ? 6 : 8;
+      if(m.kind === 'shard' && m.mineSeed){
+        ctx.strokeStyle = 'rgba(244,114,182,0.55)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(0, 0, m.r + 2, 0, Math.PI * 2); ctx.stroke();
+      }
       for(let k = 0; k < spikes; k++){
         const a = (k / spikes) * Math.PI * 2;
         const rr = m.r * (0.7 + 0.3 * Math.sin(k * 2.3 + m.rot));
@@ -711,7 +794,7 @@ function loop(){
     ctx.globalAlpha = 1;
   }
 
-  if(alive || particles.length){
+  if(alive || particles.length || (bot && bot.alive)){
     ctx.save(); ctx.translate(player.x, player.y);
 
     const trail = ctx.createRadialGradient(0, 26, 0, 0, 26, 18);
@@ -747,6 +830,29 @@ function loop(){
     ctx.restore();
   }
 
+  if(bot && bot.alive){
+    ctx.save(); ctx.translate(bot.x, bot.y);
+    const bt = ctx.createRadialGradient(0, 18, 0, 0, 18, 14);
+    bt.addColorStop(0, 'rgba(167,139,250,0.75)'); bt.addColorStop(1, 'rgba(167,139,250,0)');
+    ctx.fillStyle = bt;
+    ctx.beginPath(); ctx.ellipse(0, 18, 5, 11, 0, 0, Math.PI * 2); ctx.fill();
+    const bg2 = ctx.createLinearGradient(0, -bot.r, 0, bot.r);
+    bg2.addColorStop(0, '#f5f3ff'); bg2.addColorStop(1, '#6d28d9');
+    ctx.fillStyle = bg2;
+    ctx.beginPath();
+    ctx.moveTo(0, -bot.r);
+    ctx.lineTo(-bot.r * 0.55, bot.r * 0.48);
+    ctx.lineTo(0, bot.r * 0.15);
+    ctx.lineTo(bot.r * 0.55, bot.r * 0.48);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#c4b5fd'; ctx.globalAlpha = 0.9;
+    ctx.beginPath(); ctx.ellipse(0, -bot.r * 0.15, 4, 6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('AI', 0, 3);
+    ctx.restore();
+  }
+
   for(let fi = floatTexts.length - 1; fi >= 0; fi--){
     var ft = floatTexts[fi];
     ft.life -= 1;
@@ -770,6 +876,10 @@ function loop(){
   ctx.fill();
   ctx.fillStyle = '#fff'; ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('\u2B50 ' + Math.floor(score / 10), W / 2, 34);
+  if(bot){
+    ctx.fillStyle = 'rgba(167,139,250,0.85)'; ctx.font = 'bold 13px sans-serif';
+    ctx.fillText('AI ' + Math.floor(botScore / 10), W / 2, 50);
+  }
 
   if(shield){
     ctx.fillStyle = 'rgba(0,229,255,0.2)';
@@ -835,6 +945,15 @@ function loop(){
     ctx.fillStyle = '#ffb3c6'; ctx.font = 'bold 17px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(waveAnnounce, W / 2, H * 0.2 + 26);
   }
+  if(waveAnnounceSubTimer > 0 && waveAnnounceSub){
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.beginPath();
+    if(ctx.roundRect) ctx.roundRect(W / 2 - 165, H * 0.2 + 46, 330, 26, 13);
+    else ctx.rect(W / 2 - 165, H * 0.2 + 46, 330, 26);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.82)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(waveAnnounceSub, W / 2, H * 0.2 + 64);
+  }
 
   if(phaseTagTimer > 0 && phaseTag){
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
@@ -850,25 +969,33 @@ function loop(){
     ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('\u0414\u0432\u0438\u0433\u0430\u0439 \u043c\u044b\u0448\u043a\u043e\u0439 / \u043f\u0430\u043b\u044c\u0446\u0435\u043c', W / 2, H - 52);
     ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = '12px sans-serif';
-    ctx.fillText('\u0412\u043e\u043b\u043d\u044b \u0438 \u0431\u0440\u043e\u0441\u043a\u0438 \u0432\u043f\u043b\u043e\u0442\u043d\u0443\u044e \u2014 \u043e\u0447\u043a\u0438', W / 2, H - 30);
+    ctx.fillText('\u0412\u0432\u0435\u0440\u0445\u0443 \u2014 \u0442\u044b, \u0432\u043d\u0438\u0437\u0443 \u2014 AI. \u041a\u0442\u043e \u043d\u0430\u0431\u0435\u0440\u0451\u0442 \u0431\u043e\u043b\u044c\u0448\u0435 \u043e\u0447\u043a\u043e\u0432?', W / 2, H - 30);
     ctx.fillStyle = 'rgba(255,200,220,0.45)'; ctx.font = '11px sans-serif';
-    ctx.fillText('\u0411\u043e\u043d\u0443\u0441\u044b \u0442\u044f\u043d\u0435\u0442 \u043c\u0430\u0433\u043d\u0438\u0442', W / 2, H - 12);
+    ctx.fillText('\u041c\u0438\u043d\u043d\u043e\u0435 \u043f\u043e\u043b\u0435 \u2014 \u0440\u043e\u0437\u043e\u0432\u0430\u044f \u0441\u0435\u0442\u043a\u0430 \u043e\u0441\u043a\u043e\u043b\u043a\u043e\u0432', W / 2, H - 12);
   }
 
   if(!alive){
     ctx.fillStyle = 'rgba(0,0,0,0.78)'; ctx.fillRect(0, 0, W, H);
+    var ps = Math.floor(score / 10);
+    var bs = Math.floor(botScore / 10);
+    var duelLine = '';
+    if(raceResult === 'duel_win') duelLine = '\u0413\u043e\u043d\u043a\u0430: \u0442\u044b \u0432\u044b\u0438\u0433\u0440\u0430\u043b (' + ps + ' \u2014 ' + bs + ')';
+    else if(raceResult === 'duel_loss') duelLine = '\u0413\u043e\u043d\u043a\u0430: AI \u0432\u043f\u0435\u0440\u0435\u0434\u0438 (' + ps + ' \u2014 ' + bs + ')';
+    else duelLine = '\u0413\u043e\u043d\u043a\u0430: ' + ps + ' \u2014 ' + bs;
     ctx.fillStyle = '#ff2d55'; ctx.font = 'bold 46px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('\u{1F4A5} CRASH!', W / 2, H / 2 - 72);
+    ctx.fillText('\u{1F4A5} CRASH!', W / 2, H / 2 - 88);
+    ctx.fillStyle = '#a78bfa'; ctx.font = 'bold 17px sans-serif';
+    ctx.fillText(duelLine, W / 2, H / 2 - 48);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 26px sans-serif';
-    ctx.fillText('\u0421\u0447\u0451\u0442: ' + Math.floor(score / 10), W / 2, H / 2 - 18);
+    ctx.fillText('\u0421\u0447\u0451\u0442: ' + ps, W / 2, H / 2 - 12);
     ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = '16px sans-serif';
-    ctx.fillText('\u0420\u0435\u043a\u043e\u0440\u0434: ' + bestScore, W / 2, H / 2 + 14);
+    ctx.fillText('\u0420\u0435\u043a\u043e\u0440\u0434: ' + bestScore, W / 2, H / 2 + 22);
     if(sessionMaxCombo > 1){
       ctx.fillStyle = '#7cf5c8'; ctx.font = 'bold 15px sans-serif';
-      ctx.fillText('\u041c\u0430\u043a\u0441 combo: x' + sessionMaxCombo, W / 2, H / 2 + 44);
+      ctx.fillText('\u041c\u0430\u043a\u0441 combo: x' + sessionMaxCombo, W / 2, H / 2 + 52);
     }
     ctx.fillStyle = '#ffd600'; ctx.font = 'bold 18px sans-serif';
-    ctx.fillText('\u041a\u043b\u0438\u043a / \u0442\u0430\u043f \u2014 \u0441\u043d\u043e\u0432\u0430', W / 2, H / 2 + 78);
+    ctx.fillText('\u041a\u043b\u0438\u043a / \u0442\u0430\u043f \u2014 \u0441\u043d\u043e\u0432\u0430', W / 2, H / 2 + 86);
   }
 }
 
@@ -889,9 +1016,13 @@ function bootTelegram(){
 }
 
 resize();
-player = { x: W / 2, y: H * 0.78, r: 20 };
+player = { x: W / 2, y: H * 0.76, r: 20 };
+bot = { x: W * 0.5, y: H * 0.86, r: 16, alive: true };
 meteors = []; particles = []; floatTexts = [];
 score = 0; alive = true; frame = 0;
+botScore = 0;
+raceOver = false;
+raceResult = '';
 baseSpeed = 2.05;
 slowTimer = 0; doubleTimer = 0; magnetTimer = 0;
 touchX = W / 2; shield = false; shieldTimer = 0;
@@ -899,6 +1030,7 @@ spawnCooldown = 28;
 phaseTag = ''; phaseTagTimer = 0;
 waveMode = 'normal'; waveTimer = 0;
 waveAnnounce = ''; waveAnnounceTimer = 0;
+waveAnnounceSub = ''; waveAnnounceSubTimer = 0;
 nextWaveRoll = 400 + Math.floor(Math.random() * 120);
 combo = 0; sessionMaxCombo = 0; lastGrazeFrame = 0;
 screenShake = 0; windX = 0;
