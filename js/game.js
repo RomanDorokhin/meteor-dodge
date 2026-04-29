@@ -148,6 +148,13 @@ function initStars(){
   }
 }
 
+/** 1 в начале раунда → 0 за ~7 с: чаще спавн и чуть больше объектов */
+const OPENING_RAMP_FRAMES = 420;
+function openingEase01(){
+  if(frame <= 0) return 1;
+  return Math.max(0, 1 - frame / OPENING_RAMP_FRAMES);
+}
+
 /** ~0..1 за ~2.5 мин, дальше плато — игра остаётся проходимой */
 function diff01(){
   return Math.min(1, frame / (60 * 150));
@@ -167,6 +174,7 @@ function hazardSpeed(){
 function maxHazardsOnScreen(){
   var d = diff01();
   var cap = Math.min(13, Math.floor(4 + d * 6 + (W / 430) * 2));
+  cap += Math.floor(openingEase01() * 2.5);
   if(waveMode === 'siege') cap += 4;
   if(waveMode === 'minefield') cap += 8;
   return cap;
@@ -190,15 +198,17 @@ function countActiveHazards(){
 
 function nextSpawnDelayFrames(){
   var d = diff01();
+  var op = openingEase01();
   var lo = 50 - d * 24;
   var hi = 68 - d * 28;
   lo = Math.max(22, lo);
   hi = Math.max(lo + 6, hi);
   var t = lo + Math.random() * (hi - lo);
+  t *= 1 - op * 0.48;
   if(waveMode === 'burst') t *= 0.48;
   if(waveMode === 'siege') t *= 0.72;
   if(waveMode === 'minefield') t *= 0.55;
-  return t;
+  return Math.max(10, t);
 }
 
 function rollWave(){
@@ -341,6 +351,7 @@ function spawnHazard(){
 
   var pickupRoll = Math.random();
   var pickupChance = wm === 'burst' ? 0.11 : (0.065 + d * 0.045);
+  if(frame < 360) pickupChance += 0.055 * openingEase01();
   if(wm === 'loot') pickupChance = 1;
   if(pickupRoll < pickupChance){
     var pu = weightedPick({ shield: 2.8, slow: 2, double: 2, magnet: 2.2 });
@@ -496,6 +507,13 @@ function persistBest(){
   try{ localStorage.setItem(STORAGE_KEY, String(bestScore)); }catch(e){}
 }
 
+function seedOpeningHazards(){
+  for(var s = 0; s < 2; s++){
+    if(countActiveHazards() >= maxHazardsOnScreen()) break;
+    spawnHazard();
+  }
+}
+
 function restart(){
   player = { x: W / 2, y: H * 0.76, r: 20 };
   bot = { x: W * 0.5, y: H * 0.86, r: 16, alive: true };
@@ -507,15 +525,16 @@ function restart(){
   baseSpeed = 2.05;
   slowTimer = 0; doubleTimer = 0; magnetTimer = 0;
   shield = false; shieldTimer = 0; touchX = W / 2;
-  spawnCooldown = 28;
+  spawnCooldown = 5;
   phaseTag = ''; phaseTagTimer = 0;
   waveMode = 'normal'; waveTimer = 0;
   waveAnnounce = ''; waveAnnounceTimer = 0;
   waveAnnounceSub = ''; waveAnnounceSubTimer = 0;
-  nextWaveRoll = 400 + Math.floor(Math.random() * 120);
+  nextWaveRoll = 200 + Math.floor(Math.random() * 140);
   combo = 0; sessionMaxCombo = 0; lastGrazeFrame = 0;
   screenShake = 0; windX = 0;
   gamePaused = false;
+  seedOpeningHazards();
   hapticLight();
 }
 
@@ -1069,16 +1088,17 @@ raceResult = '';
 baseSpeed = 2.05;
 slowTimer = 0; doubleTimer = 0; magnetTimer = 0;
 touchX = W / 2; shield = false; shieldTimer = 0;
-spawnCooldown = 28;
+spawnCooldown = 5;
 phaseTag = ''; phaseTagTimer = 0;
 waveMode = 'normal'; waveTimer = 0;
 waveAnnounce = ''; waveAnnounceTimer = 0;
 waveAnnounceSub = ''; waveAnnounceSubTimer = 0;
-nextWaveRoll = 400 + Math.floor(Math.random() * 120);
+nextWaveRoll = 200 + Math.floor(Math.random() * 140);
 waveStartTimer = 0;
 combo = 0; sessionMaxCombo = 0; lastGrazeFrame = 0;
 screenShake = 0; windX = 0;
 initStars();
+seedOpeningHazards();
 bootTelegram();
 
 window.addEventListener('resize', function(){
