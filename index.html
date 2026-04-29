@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0d1b4a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Meteor Dodge</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{width:100%;height:100%;overflow:hidden;touch-action:none;overscroll-behavior:none;}
+body{
+  background:#000;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:var(--sat, env(safe-area-inset-top, 0)) var(--sar, env(safe-area-inset-right, 0)) var(--sab, env(safe-area-inset-bottom, 0)) var(--sal, env(safe-area-inset-left, 0));
+}
+canvas{display:block;touch-action:none;user-select:none;-webkit-user-select:none;}
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="Игра Meteor Dodge"></canvas>
+<script>
+(function(){
+const STORAGE_KEY = 'meteor_dodge_best_v1';
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const tg = window.Telegram && window.Telegram.WebApp;
+
+function getSafeInsets(){
+  if(tg && tg.safeAreaInset){
+    const s = tg.safeAreaInset;
+    return { top:+s.top||0, right:+s.right||0, bottom:+s.bottom||0, left:+s.left||0 };
+  }
+  return { top:0, right:0, bottom:0, left:0 };
+}
+
+function applySafeCss(insets){
+  document.documentElement.style.setProperty('--sat', insets.top + 'px');
+  document.documentElement.style.setProperty('--sar', insets.right + 'px');
+  document.documentElement.style.setProperty('--sab', insets.bottom + 'px');
+  document.documentElement.style.setProperty('--sal', insets.left + 'px');
+}
+
+let W, H;
+let player, meteors, stars, particles;
+let score, alive, frame;
+let spawnRate, speed;
+let touchX;
+let shield, shieldTimer;
+let bestScore = 0;
+
+try{
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if(saved != null) bestScore = Math.max(0, parseInt(saved, 10) || 0);
+}catch(e){}
+
+function resize(){
+  const insets = getSafeInsets();
+  applySafeCss(insets);
+  const maxW = 430;
+  let vw = Math.floor(document.body.clientWidth);
+  let vh = Math.floor(document.body.clientHeight);
+  if(tg && tg.viewportStableWidth && tg.viewportStableHeight){
+    const sw = Math.floor(tg.viewportStableWidth) - insets.left - insets.right;
+    const sh = Math.floor(tg.viewportStableHeight) - insets.top - insets.bottom;
+    if(sw > 0) vw = Math.min(vw, sw);
+    if(sh > 0) vh = Math.min(vh, sh);
+  }
+  W = canvas.width = Math.min(Math.max(vw, 1), maxW);
+  H = canvas.height = Math.max(vh, 1);
+  if(player){
+    player.x = Math.min(Math.max(player.r, player.x), W - player.r);
+    player.y = H * 0.78;
+  }
+  touchX = Math.min(Math.max(touchX, 0), W);
+}
+
+function initStars(){
+  stars = [];
+  for(let i = 0; i < 100; i++){
+    stars.push({
+      x: Math.random() * W, y: Math.random() * H,
+      r: Math.random() * 1.8 + 0.2,
+      b: Math.random() * Math.PI * 2,
+      spd: 0.006 + Math.random() * 0.014
+    });
+  }
+}
+
+function spawnMeteor(){
+  meteors.push({
+    x: Math.random() * W, y: -40,
+    r: 11 + Math.random() * 20,
+    vy: speed + Math.random() * 2,
+    vx: (Math.random() - 0.5) * 2,
+    rot: 0, rotV: (Math.random() - 0.5) * 0.12,
+    isPow: Math.random() < 0.1
+  });
+}
+
+function addPfx(x, y, col, n){
+  n = n || 12;
+  for(let k = 0; k < n; k++){
+    const a = Math.random() * Math.PI * 2, s = 2 + Math.random() * 5;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, r: 2 + Math.random() * 4, alpha: 1, color: col, decay: 0.025 + Math.random() * 0.025 });
+  }
+}
+
+function hapticLight(){
+  if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+}
+function hapticMedium(){
+  if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+}
+function hapticHeavy(){
+  if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
+}
+
+function persistBest(){
+  try{ localStorage.setItem(STORAGE_KEY, String(bestScore)); }catch(e){}
+}
+
+function restart(){
+  player = { x: W / 2, y: H * 0.78, r: 20 };
+  meteors = []; particles = [];
+  score = 0; alive = true; frame = 0; spawnRate = 65; speed = 2.8;
+  shield = false; shieldTimer = 0; touchX = W / 2;
+  hapticLight();
+}
+
+function setPointerX(clientX){
+  const rect = canvas.getBoundingClientRect();
+  touchX = clientX - rect.left;
+}
+
+canvas.addEventListener('mousemove', function(e){ if(alive) setPointerX(e.clientX); });
+canvas.addEventListener('touchmove', function(e){
+  e.preventDefault();
+  if(e.touches && e.touches[0] && alive) setPointerX(e.touches[0].clientX);
+}, { passive: false });
+canvas.addEventListener('touchstart', function(e){
+  e.preventDefault();
+  if(e.touches && e.touches[0]) setPointerX(e.touches[0].clientX);
+  if(!alive) restart();
+}, { passive: false });
+canvas.addEventListener('mousedown', function(){ if(!alive) restart(); });
+canvas.addEventListener('contextmenu', function(e){ e.preventDefault(); });
+
+function loop(){
+  requestAnimationFrame(loop);
+  ctx.clearRect(0, 0, W, H);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#1a0533'); bg.addColorStop(1, '#0d1b4a');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+  stars.forEach(function(s){
+    s.b += s.spd;
+    ctx.globalAlpha = 0.3 + Math.sin(s.b) * 0.45;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  if(alive){
+    frame++; score++;
+    shieldTimer = Math.max(0, shieldTimer - 1);
+    if(!shieldTimer) shield = false;
+    if(frame % 290 === 0){ speed += 0.28; spawnRate = Math.max(18, spawnRate - 5); }
+    if(frame % spawnRate === 0) spawnMeteor();
+    player.x += (touchX - player.x) * 0.17;
+    player.x = Math.max(player.r, Math.min(W - player.r, player.x));
+  }
+
+  for(let i = meteors.length - 1; i >= 0; i--){
+    const m = meteors[i];
+    m.y += m.vy; m.x += m.vx; m.rot += m.rotV;
+    if(m.y > H + 60){ meteors.splice(i, 1); continue; }
+
+    if(alive){
+      const dx = m.x - player.x, dy = m.y - player.y;
+      if(Math.sqrt(dx * dx + dy * dy) < m.r + player.r - 8){
+        if(m.isPow){
+          shield = true; shieldTimer = 350;
+          addPfx(m.x, m.y, '#00e5ff', 15);
+          meteors.splice(i, 1);
+          hapticMedium();
+          continue;
+        } else if(shield){
+          shield = false; shieldTimer = 0;
+          addPfx(m.x, m.y, '#00e5ff', 15);
+          meteors.splice(i, 1);
+          hapticLight();
+          continue;
+        } else {
+          alive = false;
+          const roundScore = Math.floor(score / 10);
+          if(roundScore > bestScore){
+            bestScore = roundScore;
+            persistBest();
+          }
+          addPfx(player.x, player.y, '#ff2d55', 30);
+          hapticHeavy();
+        }
+      }
+    }
+
+    ctx.save(); ctx.translate(m.x, m.y); ctx.rotate(m.rot);
+    if(m.isPow){
+      ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 16;
+      ctx.fillStyle = '#00e5ff';
+    } else {
+      const grd = ctx.createRadialGradient(0, 0, 2, 0, 0, m.r);
+      grd.addColorStop(0, '#ff9800'); grd.addColorStop(0.5, '#f44336'); grd.addColorStop(1, '#4a1010');
+      ctx.fillStyle = grd;
+    }
+    ctx.beginPath();
+    for(let k = 0; k < 8; k++){
+      const a = (k / 8) * Math.PI * 2;
+      const rr = m.r * (0.7 + 0.3 * Math.sin(k * 2.3 + m.rot));
+      if(k === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.shadowBlur = 0;
+    if(m.isPow){
+      ctx.fillStyle = '#fff'; ctx.font = '14px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('\u{1F6E1}', 0, 1);
+    }
+    ctx.restore();
+  }
+
+  for(let i = particles.length - 1; i >= 0; i--){
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.alpha -= p.decay;
+    if(p.alpha <= 0){ particles.splice(i, 1); continue; }
+    ctx.globalAlpha = p.alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  if(alive || particles.length){
+    ctx.save(); ctx.translate(player.x, player.y);
+
+    const trail = ctx.createRadialGradient(0, 26, 0, 0, 26, 18);
+    trail.addColorStop(0, 'rgba(96,165,250,0.8)'); trail.addColorStop(1, 'rgba(96,165,250,0)');
+    ctx.fillStyle = trail;
+    ctx.beginPath(); ctx.ellipse(0, 26, 7, 15 + Math.sin(frame * 0.25) * 4, 0, 0, Math.PI * 2); ctx.fill();
+
+    if(shield){
+      ctx.strokeStyle = 'rgba(0,229,255,' + (0.5 + Math.sin(frame * 0.12) * 0.3) + ')';
+      ctx.lineWidth = 2.5; ctx.setLineDash([5, 5]);
+      ctx.beginPath(); ctx.arc(0, 0, player.r + 11, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    const sg = ctx.createLinearGradient(0, -player.r, 0, player.r);
+    sg.addColorStop(0, '#e0e0ff'); sg.addColorStop(1, '#7c3aed');
+    ctx.fillStyle = sg;
+    ctx.beginPath();
+    ctx.moveTo(0, -player.r);
+    ctx.lineTo(-player.r * 0.6, player.r * 0.5);
+    ctx.lineTo(0, player.r * 0.2);
+    ctx.lineTo(player.r * 0.6, player.r * 0.5);
+    ctx.closePath(); ctx.fill();
+
+    ctx.fillStyle = '#00e5ff'; ctx.globalAlpha = 0.75;
+    ctx.beginPath(); ctx.ellipse(0, -player.r * 0.2, 5, 7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath();
+  if(ctx.roundRect) ctx.roundRect(W / 2 - 65, 12, 130, 36, 18);
+  else { ctx.rect(W / 2 - 65, 12, 130, 36); }
+  ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('\u2B50 ' + Math.floor(score / 10), W / 2, 34);
+
+  if(shield){
+    ctx.fillStyle = 'rgba(0,229,255,0.2)';
+    ctx.beginPath();
+    if(ctx.roundRect) ctx.roundRect(10, 12, 95, 32, 16);
+    else ctx.rect(10, 12, 95, 32);
+    ctx.fill();
+    ctx.fillStyle = '#00e5ff'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('\u{1F6E1} \u0417\u0410\u0429\u0418\u0422\u0410', 18, 32);
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'right';
+  ctx.fillText('LVL ' + Math.floor(frame / 290 + 1), W - 12, 34);
+
+  if(frame < 90 && alive){
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('\u0414\u0432\u0438\u0433\u0430\u0439 \u043c\u044b\u0448\u043a\u043e\u0439 / \u043f\u0430\u043b\u044c\u0446\u0435\u043c', W / 2, H - 24);
+  }
+
+  if(!alive){
+    ctx.fillStyle = 'rgba(0,0,0,0.78)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ff2d55'; ctx.font = 'bold 46px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('\u{1F4A5} CRASH!', W / 2, H / 2 - 55);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 26px sans-serif';
+    ctx.fillText('\u0421\u0447\u0451\u0442: ' + Math.floor(score / 10), W / 2, H / 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = '16px sans-serif';
+    ctx.fillText('\u0420\u0435\u043a\u043e\u0440\u0434: ' + bestScore, W / 2, H / 2 + 34);
+    ctx.fillStyle = '#ffd600'; ctx.font = 'bold 18px sans-serif';
+    ctx.fillText('\u041a\u043b\u0438\u043a / \u0442\u0430\u043f \u2014 \u0441\u043d\u043e\u0432\u0430', W / 2, H / 2 + 72);
+  }
+}
+
+function bootTelegram(){
+  if(!tg) return;
+  tg.ready();
+  tg.expand();
+  if(tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+  const p = tg.themeParams || {};
+  if(p.bg_color) document.querySelector('meta[name="theme-color"]').setAttribute('content', p.bg_color);
+  if(typeof tg.setHeaderColor === 'function'){
+    try{ tg.setHeaderColor('secondary_bg_color'); }catch(e){}
+  }
+  tg.onEvent('viewportChanged', function(){
+    resize();
+    initStars();
+  });
+}
+
+resize();
+player = { x: W / 2, y: H * 0.78, r: 20 };
+meteors = []; particles = [];
+score = 0; alive = true; frame = 0; spawnRate = 65; speed = 2.8;
+touchX = W / 2; shield = false; shieldTimer = 0;
+initStars();
+bootTelegram();
+
+window.addEventListener('resize', function(){
+  resize();
+  initStars();
+});
+window.addEventListener('orientationchange', function(){
+  setTimeout(function(){ resize(); initStars(); }, 200);
+});
+
+loop();
+})();
+</script>
+</body>
+</html>
