@@ -3,6 +3,25 @@ const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const tg = window.Telegram && window.Telegram.WebApp;
 
+/** iOS / Telegram WKWebView often lacks ctx.ellipse — without this the loop throws after stars */
+function fillEllipse(cx, cy, rx, ry, rotation){
+  rotation = rotation || 0;
+  if(typeof ctx.ellipse === 'function'){
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, rotation, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  ctx.scale(rx, ry);
+  ctx.beginPath();
+  ctx.arc(0, 0, 1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function getSafeInsets(){
   if(tg && tg.safeAreaInset){
     const s = tg.safeAreaInset;
@@ -780,7 +799,7 @@ function loop(){
     const trail = ctx.createRadialGradient(0, 26, 0, 0, 26, 18);
     trail.addColorStop(0, 'rgba(96,165,250,0.8)'); trail.addColorStop(1, 'rgba(96,165,250,0)');
     ctx.fillStyle = trail;
-    ctx.beginPath(); ctx.ellipse(0, 26, 7, 15 + Math.sin(frame * 0.25) * 4, 0, 0, Math.PI * 2); ctx.fill();
+    fillEllipse(0, 26, 7, 15 + Math.sin(frame * 0.25) * 4, 0);
 
     if(shield){
       ctx.strokeStyle = 'rgba(0,229,255,' + (0.5 + Math.sin(frame * 0.12) * 0.3) + ')';
@@ -805,7 +824,7 @@ function loop(){
     ctx.closePath(); ctx.fill();
 
     ctx.fillStyle = '#00e5ff'; ctx.globalAlpha = 0.75;
-    ctx.beginPath(); ctx.ellipse(0, -player.r * 0.2, 5, 7, 0, 0, Math.PI * 2); ctx.fill();
+    fillEllipse(0, -player.r * 0.2, 5, 7, 0);
     ctx.globalAlpha = 1;
     ctx.restore();
   }
@@ -815,7 +834,7 @@ function loop(){
     const bt = ctx.createRadialGradient(0, 18, 0, 0, 18, 14);
     bt.addColorStop(0, 'rgba(167,139,250,0.75)'); bt.addColorStop(1, 'rgba(167,139,250,0)');
     ctx.fillStyle = bt;
-    ctx.beginPath(); ctx.ellipse(0, 18, 5, 11, 0, 0, Math.PI * 2); ctx.fill();
+    fillEllipse(0, 18, 5, 11, 0);
     const bg2 = ctx.createLinearGradient(0, -bot.r, 0, bot.r);
     bg2.addColorStop(0, '#f5f3ff'); bg2.addColorStop(1, '#6d28d9');
     ctx.fillStyle = bg2;
@@ -826,7 +845,7 @@ function loop(){
     ctx.lineTo(bot.r * 0.55, bot.r * 0.48);
     ctx.closePath(); ctx.fill();
     ctx.fillStyle = '#c4b5fd'; ctx.globalAlpha = 0.9;
-    ctx.beginPath(); ctx.ellipse(0, -bot.r * 0.15, 4, 6, 0, 0, Math.PI * 2); ctx.fill();
+    fillEllipse(0, -bot.r * 0.15, 4, 6, 0);
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#fff'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('AI', 0, 3);
