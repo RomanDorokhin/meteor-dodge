@@ -22,6 +22,32 @@ function fillEllipse(cx, cy, rx, ry, rotation){
   ctx.restore();
 }
 
+/** Older WebViews lack roundRect — HUD uses this instead of ctx.roundRect */
+function fillRoundRect(x, y, w, h, r){
+  if(typeof ctx.roundRect === 'function'){
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+    ctx.fill();
+    return;
+  }
+  r = Math.min(r, w * 0.5, h * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+const MAX_PARTICLES = 420;
+const MAX_FLOAT_LABELS = 22;
+
 function getSafeInsets(){
   if(tg && tg.safeAreaInset){
     const s = tg.safeAreaInset;
@@ -65,6 +91,8 @@ let raceOver = false;
 let raceResult = '';
 let waveAnnounceSub = '';
 let waveAnnounceSubTimer = 0;
+let gamePaused = false;
+let waveStartTimer = 0;
 
 try{
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -194,6 +222,7 @@ function startWave(mode){
   windX = (Math.random() < 0.5 ? -1 : 1) * (0.22 + Math.random() * 0.4);
   if(mode === 'wind') waveTimer = 420 + Math.floor(Math.random() * 120);
   if(mode === 'loot') waveTimer = 280;
+  waveStartTimer = waveTimer;
   var names = {
     burst: '\u041d\u0410\u041b\u0401\u0422!',
     siege: '\u041e\u0411\u0421\u0410\u0414\u0410!',
@@ -269,6 +298,7 @@ function weightedPick(weights){
 
 function addFloatText(x, y, text, color, life){
   life = life || 55;
+  while(floatTexts.length >= MAX_FLOAT_LABELS) floatTexts.shift();
   floatTexts.push({ x: x, y: y, text: text, life: life, maxLife: life, vy: -0.9 - Math.random() * 0.4, color: color || '#fff' });
 }
 
@@ -449,6 +479,7 @@ function addPfx(x, y, col, n){
     const a = Math.random() * Math.PI * 2, s = 2 + Math.random() * 5;
     particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, r: 2 + Math.random() * 4, alpha: 1, color: col, decay: 0.025 + Math.random() * 0.025 });
   }
+  while(particles.length > MAX_PARTICLES) particles.shift();
 }
 
 function hapticLight(){
@@ -484,6 +515,7 @@ function restart(){
   nextWaveRoll = 400 + Math.floor(Math.random() * 120);
   combo = 0; sessionMaxCombo = 0; lastGrazeFrame = 0;
   screenShake = 0; windX = 0;
+  gamePaused = false;
   hapticLight();
 }
 
@@ -527,6 +559,7 @@ canvas.addEventListener('contextmenu', function(e){ e.preventDefault(); });
 
 function loop(){
   requestAnimationFrame(loop);
+  try{
   ctx.clearRect(0, 0, W, H);
 
   var sx = (Math.random() - 0.5) * screenShake * 2.2;
@@ -553,7 +586,7 @@ function loop(){
   });
   ctx.globalAlpha = 1;
 
-  if(alive && !raceOver){
+  if(alive && !raceOver && !gamePaused){
     frame++;
     var pt = doubleTimer > 0 ? 2 : 1;
     score += pt;
@@ -869,65 +902,56 @@ function loop(){
   ctx.restore();
 
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.beginPath();
-  if(ctx.roundRect) ctx.roundRect(W / 2 - 65, 12, 130, 36, 18);
-  else { ctx.rect(W / 2 - 65, 12, 130, 36); }
-  ctx.fill();
+  fillRoundRect(W / 2 - 65, 12, 130, 36, 18);
   ctx.fillStyle = '#fff'; ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('\u2B50 ' + Math.floor(score / 10), W / 2, 34);
   if(bot){
     ctx.fillStyle = 'rgba(167,139,250,0.85)'; ctx.font = 'bold 13px sans-serif';
     ctx.fillText('AI ' + Math.floor(botScore / 10), W / 2, 50);
   }
+  ctx.fillStyle = 'rgba(255,215,120,0.9)'; ctx.font = 'bold 11px sans-serif';
+  ctx.fillText('\u{1F3C6} ' + bestScore, W / 2, 64);
 
+  var lb = 12;
   if(shield){
+    var shH = (shieldTimer > 0 && shieldTimer < 90) ? 46 : 32;
     ctx.fillStyle = 'rgba(0,229,255,0.2)';
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(10, 12, 95, 32, 16);
-    else ctx.rect(10, 12, 95, 32);
-    ctx.fill();
+    fillRoundRect(10, lb, 95, shH, 16);
     ctx.fillStyle = '#00e5ff'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left';
-    ctx.fillText('\u{1F6E1} \u0417\u0410\u0429\u0418\u0422\u0410', 18, 32);
+    ctx.fillText('\u{1F6E1} \u0417\u0410\u0429\u0418\u0422\u0410', 18, lb + 20);
+    if(shieldTimer > 0 && shieldTimer < 90){
+      ctx.fillStyle = 'rgba(255,180,100,0.95)'; ctx.font = 'bold 11px sans-serif';
+      ctx.fillText('\u041e\u0441\u0442\u0430\u043b\u043e\u0441\u044c ~' + Math.ceil(shieldTimer / 60) + ' \u0441\u0435\u043a', 18, lb + 38);
+    }
+    lb += shH + 6;
   }
 
   if(slowTimer > 0){
     ctx.fillStyle = 'rgba(56,189,248,0.2)';
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(10, shield ? 50 : 12, 108, 30, 15);
-    else ctx.rect(10, shield ? 50 : 12, 108, 30);
-    ctx.fill();
+    fillRoundRect(10, lb, 108, 30, 15);
     ctx.fillStyle = '#7dd3fc'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
-    ctx.fillText('\u2744 \u0417\u0410\u041c\u0415\u0414\u041b.', 18, shield ? 70 : 32);
+    ctx.fillText('\u2744 \u0417\u0410\u041c\u0415\u0414\u041b.', 18, lb + 20);
+    lb += 38;
   }
 
   if(doubleTimer > 0){
-    var dyb = 12 + (shield ? 38 : 0) + (slowTimer > 0 ? 38 : 0);
     ctx.fillStyle = 'rgba(255,213,79,0.2)';
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(10, dyb, 118, 30, 15);
-    else ctx.rect(10, dyb, 118, 30);
-    ctx.fill();
+    fillRoundRect(10, lb, 118, 30, 15);
     ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
-    ctx.fillText('\u2B50 x2 \u041e\u0427\u041a\u0418', 18, dyb + 20);
+    ctx.fillText('\u2B50 x2 \u041e\u0427\u041a\u0418', 18, lb + 20);
+    lb += 38;
   }
 
   if(magnetTimer > 0){
-    var dym = 12 + (shield ? 38 : 0) + (slowTimer > 0 ? 38 : 0) + (doubleTimer > 0 ? 38 : 0);
     ctx.fillStyle = 'rgba(232,121,249,0.22)';
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(10, dym, 124, 30, 15);
-    else ctx.rect(10, dym, 124, 30);
-    ctx.fill();
+    fillRoundRect(10, lb, 124, 30, 15);
     ctx.fillStyle = '#e879f9'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
-    ctx.fillText('\u{1F9F2} \u041c\u0410\u0413\u041d\u0418\u0422', 18, dym + 20);
+    ctx.fillText('\u{1F9F2} \u041c\u0410\u0413\u041d\u0418\u0422', 18, lb + 20);
   }
 
   if(combo > 1 && alive){
     ctx.fillStyle = 'rgba(124,245,200,0.25)';
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(W / 2 - 52, H - 56, 104, 28, 14);
-    else ctx.rect(W / 2 - 52, H - 56, 104, 28);
-    ctx.fill();
+    fillRoundRect(W / 2 - 52, H - 56, 104, 28, 14);
     ctx.fillStyle = '#7cf5c8'; ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('COMBO x' + combo, W / 2, H - 36);
   }
@@ -935,33 +959,43 @@ function loop(){
   ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'right';
   ctx.fillText('LVL ' + (1 + Math.floor(diff01() * 24)), W - 12, 34);
 
+  if(waveMode !== 'normal' && waveStartTimer > 0 && waveTimer > 0){
+    var wr = waveTimer / waveStartTimer;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    fillRoundRect(W - 92, 58, 82, 8, 4);
+    ctx.fillStyle = 'rgba(96,165,250,0.95)';
+    ctx.beginPath();
+    ctx.rect(W - 90, 60, 78 * wr, 4);
+    ctx.fill();
+  }
+
   if(waveAnnounceTimer > 0 && waveAnnounce){
     ctx.fillStyle = 'rgba(255,61,113,0.35)';
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(W / 2 - 158, H * 0.2, 316, 40, 20);
-    else ctx.rect(W / 2 - 158, H * 0.2, 316, 40);
-    ctx.fill();
+    fillRoundRect(W / 2 - 158, H * 0.2, 316, 40, 20);
     ctx.fillStyle = '#ffb3c6'; ctx.font = 'bold 17px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(waveAnnounce, W / 2, H * 0.2 + 26);
   }
   if(waveAnnounceSubTimer > 0 && waveAnnounceSub){
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(W / 2 - 165, H * 0.2 + 46, 330, 26, 13);
-    else ctx.rect(W / 2 - 165, H * 0.2 + 46, 330, 26);
-    ctx.fill();
+    fillRoundRect(W / 2 - 165, H * 0.2 + 46, 330, 26, 13);
     ctx.fillStyle = 'rgba(255,255,255,0.82)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(waveAnnounceSub, W / 2, H * 0.2 + 64);
   }
 
   if(phaseTagTimer > 0 && phaseTag){
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(W / 2 - 150, H * 0.12, 300, 28, 14);
-    else ctx.rect(W / 2 - 150, H * 0.12, 300, 28);
-    ctx.fill();
+    fillRoundRect(W / 2 - 150, H * 0.12, 300, 28, 14);
     ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(phaseTag, W / 2, H * 0.12 + 19);
+  }
+
+  if(gamePaused && alive){
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('\u041f\u0410\u0423\u0417\u0410', W / 2, H / 2 - 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.font = '14px sans-serif';
+    ctx.fillText('\u0412\u0435\u0440\u043d\u0438\u0441\u044c \u0432 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435', W / 2, H / 2 + 18);
   }
 
   if(frame < 110 && alive){
@@ -996,6 +1030,9 @@ function loop(){
     ctx.fillStyle = '#ffd600'; ctx.font = 'bold 18px sans-serif';
     ctx.fillText('\u041a\u043b\u0438\u043a / \u0442\u0430\u043f \u2014 \u0441\u043d\u043e\u0432\u0430', W / 2, H / 2 + 86);
   }
+  }catch(err){
+    if(typeof console !== 'undefined' && console.error) console.error(err);
+  }
 }
 
 function bootTelegram(){
@@ -1014,6 +1051,13 @@ function bootTelegram(){
   });
 }
 
+document.addEventListener('visibilitychange', function(){
+  gamePaused = document.hidden;
+});
+window.addEventListener('pagehide', function(){
+  gamePaused = true;
+});
+
 resize();
 player = { x: W / 2, y: H * 0.76, r: 20 };
 bot = { x: W * 0.5, y: H * 0.86, r: 16, alive: true };
@@ -1031,6 +1075,7 @@ waveMode = 'normal'; waveTimer = 0;
 waveAnnounce = ''; waveAnnounceTimer = 0;
 waveAnnounceSub = ''; waveAnnounceSubTimer = 0;
 nextWaveRoll = 400 + Math.floor(Math.random() * 120);
+waveStartTimer = 0;
 combo = 0; sessionMaxCombo = 0; lastGrazeFrame = 0;
 screenShake = 0; windX = 0;
 initStars();
